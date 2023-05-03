@@ -13,16 +13,11 @@ Simple training loop; Boilerplate that could apply to any arbitrary neural netwo
 so nothing in this file really has anything to do with GPT specifically.
 """
 
-import math
 import logging
+import math
 
-from tqdm import tqdm
-import numpy as np
-
-import torch
-import torch.optim as optim
-from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data.dataloader import DataLoader
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +27,10 @@ from collections import deque
 import random
 import cv2
 import torch
-from PIL import Image
 
-from gpu_mem_track import MemTracker
-import inspect
+# from gpu_mem_track import MemTracker
 import time
+
 
 class TrainerConfig:
     # optimization parameters
@@ -45,19 +39,20 @@ class TrainerConfig:
     learning_rate = 3e-4
     betas = (0.9, 0.95)
     grad_norm_clip = 1.0
-    weight_decay = 0.1 # only applied on matmul weights
+    weight_decay = 0.1  # only applied on matmul weights
     lr_decay = False
-    warmup_tokens = 375e6 # these two numbers come from the GPT-3 paper, but may not be good defaults elsewhere
-    final_tokens = 260e9 # (at what point we reach 10% of original LR)
+    warmup_tokens = 375e6  # these two numbers come from the GPT-3 paper, but may not be good defaults elsewhere
+    final_tokens = 260e9  # (at what point we reach 10% of original LR)
     # checkpoint settings
     ckpt_path = None
-    num_workers = 0 # for DataLoader
+    num_workers = 0  # for DataLoader
 
     def __init__(self, **kwargs):
-        for k,v in kwargs.items():
+        for k, v in kwargs.items():
             setattr(self, k, v)
 
-#网络参数数量
+
+# 网络参数数量
 def get_parameter_number(net):
     total_num = sum(p.numel() for p in net.parameters())
     trainable_num = sum(p.numel() for p in net.parameters() if p.requires_grad)
@@ -91,34 +86,33 @@ class Trainer:
         model, config = self.model, self.config
         raw_model = model.module if hasattr(self.model, "module") else model
         optimizer = raw_model.configure_optimizers(config)
-        model_simu=self.model_simu
+        model_simu = self.model_simu
 
-        def evaluator(rankedlist, testlist,k):
-            data_shape=rankedlist.shape  # (batch_size,block_size,voc_size)
+        def evaluator(rankedlist, testlist, k):
+            data_shape = rankedlist.shape  # (batch_size,block_size,voc_size)
             Hits_i = 0
             Len_R = 0
-            Len_T = data_shape[0] 
+            Len_T = data_shape[0]
             MRR_i = 0
             HR_i = 0
             NDCG_i = 0
-            
-            for i in range(data_shape[0]):
-                rec_list=rankedlist[i,-1,:]
-                values,topk_index=rec_list.topk(k, largest=True, sorted=True)
-                topk_index=list(topk_index)
-                for p in range(k):
-                    if testlist[i,-1,0]==topk_index[p]:
-                        Hits_i+=1
-                        HR_i+=1
-                        # 注意j的取值从0开始
-                        MRR_i+=1/(p+1)   
-                        NDCG_i+=1/(math.log2(1+p+1))
-                        break
-            HR_i/=Len_T
-            MRR_i/=Len_T
-            NDCG_i/=Len_T
-            return MRR_i, HR_i, NDCG_i
 
+            for i in range(data_shape[0]):
+                rec_list = rankedlist[i, -1, :]
+                values, topk_index = rec_list.topk(k, largest=True, sorted=True)
+                topk_index = list(topk_index)
+                for p in range(k):
+                    if testlist[i, -1, 0] == topk_index[p]:
+                        Hits_i += 1
+                        HR_i += 1
+                        # 注意j的取值从0开始
+                        MRR_i += 1 / (p + 1)
+                        NDCG_i += 1 / (math.log2(1 + p + 1))
+                        break
+            HR_i /= Len_T
+            MRR_i /= Len_T
+            NDCG_i /= Len_T
+            return MRR_i, HR_i, NDCG_i
 
         def run_epoch(split, epoch_num=0):
             is_train = split == 'train'
@@ -131,26 +125,25 @@ class Trainer:
 
             losses = []
             scores = []
-            return_total=[]
+            return_total = []
             pbar = tqdm(enumerate(loader), total=len(loader)) if is_train else enumerate(loader)
             # frame=inspect.currentframe()
             # gpu_tracker=MemTracker(frame)
-            gpu_tracker=MemTracker()
+            # gpu_tracker=MemTracker()
             for it, (x, y, y_neg, y_len, r_step, r, t) in pbar:
                 # if is_train:
                 #     for i in range(r.shape[0]):
                 #         r[i,:,:]=r[i,:,:]-r[i,-1,:]
                 # else:
                 # r = r_step.unsqueeze(2)
-                if not is_train: 
-                    
-                    r_batch=list(range(210,0,-7))
-                    r_batch=torch.tensor(r_batch, dtype=torch.float32)
-                    for i in range(r.shape[0]):
-                        r[i,:,0]=r_batch
-                    r_simu = torch.ones_like(r)*7
-                    r_simu = r_simu.to(self.device)
+                if not is_train:
 
+                    r_batch = list(range(210, 0, -7))
+                    r_batch = torch.tensor(r_batch, dtype=torch.float32)
+                    for i in range(r.shape[0]):
+                        r[i, :, 0] = r_batch
+                    r_simu = torch.ones_like(r) * 7
+                    r_simu = r_simu.to(self.device)
 
                 x = x.to(self.device)
                 y = y.to(self.device)
@@ -159,24 +152,24 @@ class Trainer:
                 t = t.to(self.device)
                 y_len = y_len.to(self.device)
                 r_step = r_step.to(self.device)
-                
+
                 # forward the model
-                MRR=[]
-                HR=[]
-                NDCG=[]
+                MRR = []
+                HR = []
+                NDCG = []
                 if is_train:
                     with torch.set_grad_enabled(is_train):
-                        logits, loss = model(x, y,y_neg, y_len, y, r,r_step, t)
+                        logits, loss = model(x, y, y_neg, y_len, y, r, r_step, t)
                         losses.append(loss.item())
 
                 if not is_train:
                     with torch.set_grad_enabled(is_train):
-                        y_pred,return_batch=model.predict_seq2seq(x, y, y_len, y, r,r_step, t, 20, self.device)
+                        y_pred, return_batch = model.predict_seq2seq(x, y, y_len, y, r, r_step, t, 20, self.device)
 
-                        return_batch,loss=model_simu(x,y_pred,r_step,r_simu,t)
+                        return_batch, loss = model_simu(x, y_pred, r_step, r_simu, t)
 
-                        return_batch_sum=torch.sum(return_batch, 1)
-                        return_batch_mean=torch.mean(return_batch_sum)
+                        return_batch_sum = torch.sum(return_batch, 1)
+                        return_batch_mean = torch.mean(return_batch_sum)
                         return_total.append(return_batch_mean)
                 if is_train:
 
@@ -188,13 +181,14 @@ class Trainer:
 
                     # decay the learning rate based on our progress
                     if config.lr_decay:
-                        self.tokens += (y >= 0).sum() # number of tokens processed this step (i.e. label is not -100)
+                        self.tokens += (y >= 0).sum()  # number of tokens processed this step (i.e. label is not -100)
                         if self.tokens < config.warmup_tokens:
                             # linear warmup
                             lr_mult = float(self.tokens) / float(max(1, config.warmup_tokens))
                         else:
                             # cosine learning rate decay
-                            progress = float(self.tokens - config.warmup_tokens) / float(max(1, config.final_tokens - config.warmup_tokens))
+                            progress = float(self.tokens - config.warmup_tokens) / float(
+                                max(1, config.final_tokens - config.warmup_tokens))
                             lr_mult = max(0.1, 0.5 * (1.0 + math.cos(math.pi * progress)))
                         lr = config.learning_rate * lr_mult
                         for param_group in optimizer.param_groups:
@@ -202,33 +196,32 @@ class Trainer:
                     else:
                         lr = config.learning_rate
 
-                    pbar.set_description(f"epoch {epoch+1} iter {it}: train loss {loss.item():.5f}. lr {lr:e}")
-                
-                
+                    pbar.set_description(f"epoch {epoch + 1} iter {it}: train loss {loss.item():.5f}. lr {lr:e}")
+
             if not is_train:
-                return_epochs_mean=sum(return_total)/len(return_total)
-                print('return_mean is:',return_epochs_mean)
+                return_epochs_mean = sum(return_total) / len(return_total)
+                print('return_mean is:', return_epochs_mean)
                 return return_epochs_mean
-        
+
         # Rec accuracy eval
         best_loss = float('inf')
-        
+
         best_return = -float('inf')
 
-        self.tokens = 0 # counter used for learning rate decay
+        self.tokens = 0  # counter used for learning rate decay
 
         for epoch in range(config.max_epochs):
 
             run_epoch('train', epoch_num=epoch)
             if self.test_dataset is not None:
-                time1=time.time()
+                time1 = time.time()
                 test_loss = run_epoch('test')
-                time2=time.time()
-                print(time2-time1)
-    
+                time2 = time.time()
+                print(time2 - time1)
+
     def get_returns(self, ret):
         self.model.train(False)
-        args=Args(self.config.game.lower(), self.config.seed)
+        args = Args(self.config.game.lower(), self.config.seed)
         env = Env(args)
         env.eval()
 
@@ -239,9 +232,10 @@ class Trainer:
             state = state.type(torch.float32).to(self.device).unsqueeze(0).unsqueeze(0)
             rtgs = [ret]
             # first state is from env, first rtg is target return, and first timestep is 0
-            sampled_action = sample(self.model.module, state, 1, temperature=1.0, sample=True, actions=None, 
-                rtgs=torch.tensor(rtgs, dtype=torch.long).to(self.device).unsqueeze(0).unsqueeze(-1), 
-                timesteps=torch.zeros((1, 1, 1), dtype=torch.int64).to(self.device))
+            sampled_action = sample(self.model.module, state, 1, temperature=1.0, sample=True, actions=None,
+                                    rtgs=torch.tensor(rtgs, dtype=torch.long).to(self.device).unsqueeze(0).unsqueeze(
+                                        -1),
+                                    timesteps=torch.zeros((1, 1, 1), dtype=torch.int64).to(self.device))
 
             j = 0
             all_states = state
@@ -249,7 +243,7 @@ class Trainer:
             while True:
                 if done:
                     state, reward_sum, done = env.reset(), 0, False
-                action = sampled_action.cpu().numpy()[0,-1]
+                action = sampled_action.cpu().numpy()[0, -1]
                 actions += [sampled_action]
                 state, reward, done = env.step(action)
                 reward_sum += reward
@@ -266,12 +260,16 @@ class Trainer:
                 rtgs += [rtgs[-1] - reward]
                 # all_states has all previous states and rtgs has all previous rtgs (will be cut to block_size in utils.sample)
                 # timestep is just current timestep
-                sampled_action = sample(self.model.module, all_states.unsqueeze(0), 1, temperature=1.0, sample=True, 
-                    actions=torch.tensor(actions, dtype=torch.long).to(self.device).unsqueeze(1).unsqueeze(0), 
-                    rtgs=torch.tensor(rtgs, dtype=torch.long).to(self.device).unsqueeze(0).unsqueeze(-1), 
-                    timesteps=(min(j, self.config.max_timestep) * torch.ones((1, 1, 1), dtype=torch.int64).to(self.device)))
+                sampled_action = sample(self.model.module, all_states.unsqueeze(0), 1, temperature=1.0, sample=True,
+                                        actions=torch.tensor(actions, dtype=torch.long).to(self.device).unsqueeze(
+                                            1).unsqueeze(0),
+                                        rtgs=torch.tensor(rtgs, dtype=torch.long).to(self.device).unsqueeze(
+                                            0).unsqueeze(-1),
+                                        timesteps=(min(j, self.config.max_timestep) * torch.ones((1, 1, 1),
+                                                                                                 dtype=torch.int64).to(
+                                            self.device)))
         env.close()
-        eval_return = sum(T_rewards)/10.
+        eval_return = sum(T_rewards) / 10.
         print("target return: %d, eval return: %d" % (ret, eval_return))
         self.model.train(True)
         return eval_return
@@ -364,6 +362,7 @@ class Env():
 
     def close(self):
         cv2.destroyAllWindows()
+
 
 class Args:
     def __init__(self, game, seed):

@@ -1,5 +1,8 @@
 import csv
 import logging
+
+from tqdm import tqdm
+
 # make deterministic
 from mingpt.utils import set_seed
 import numpy as np
@@ -7,7 +10,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import math
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 from mingpt.model_seq import GPT, GPTConfig
 from mingpt.trainer_seq import Trainer, TrainerConfig
 from mingpt.model_simulator import GPT as GPT_simu
@@ -19,9 +22,9 @@ from collections import deque
 import random
 import torch
 import pickle
-import blosc
+# import blosc
 import argparse
-from create_dataset import create_dataset
+# from create_dataset import create_dataset
 import pandas as pd
 
 parser = argparse.ArgumentParser()
@@ -189,6 +192,18 @@ done_idxs_train=done_idxs[:idx_num_train+1]
 timesteps_train=timestep_paddle(timesteps_train)
 
 train_dataset = StateActionReturnDataset(obss_train, args.context_length*3, actions_train,actions_neg_train, actions_len_train, return_step_train, done_idxs_train, rtgs_train, timesteps_train)
+# train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0, drop_last=True)
+# # train_loader = DataLoader(train_dataset, shuffle=True, batch_size=args.batch_size, num_workers=4, drop_last=True)
+# pbar = tqdm(enumerate(train_loader))
+# for it, (x, y, y_neg, y_len, r_step, r, t) in pbar:
+#     print(it)
+# for it, data in pbar:
+#     print(it)
+
+
+
+
+
 
 #test_dataset
 sample_num_test=done_idxs[idx_num]

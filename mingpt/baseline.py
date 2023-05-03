@@ -17,26 +17,21 @@ GPT model:
 - the final decoder is a linear projection into a vanilla Softmax classifier
 """
 
-import math
 import logging
+import math
+
 import torch
-import torch.nn as nn
-from torch.nn import functional as F
-
-import collections
-from torch import nn
 from d2l import torch as d2l
-import time
-
-from torch.nn.modules.activation import Sigmoid
+from torch import nn
+from torch.nn import functional as F
 
 logger = logging.getLogger(__name__)
 
-import numpy as np
 
 class GELU(nn.Module):
     def forward(self, input):
         return F.gelu(input)
+
 
 class GPTConfig:
     """ base GPT config, params common to all GPT versions """
@@ -47,14 +42,16 @@ class GPTConfig:
     def __init__(self, vocab_size, block_size, **kwargs):
         self.vocab_size = vocab_size
         self.block_size = block_size
-        for k,v in kwargs.items():
+        for k, v in kwargs.items():
             setattr(self, k, v)
+
 
 class GPT1Config(GPTConfig):
     """ GPT-1 like network roughly 125M params """
     n_layer = 12
     n_head = 12
     n_embd = 768
+
 
 class CausalSelfAttention(nn.Module):
     """
@@ -75,28 +72,28 @@ class CausalSelfAttention(nn.Module):
         self.resid_drop = nn.Dropout(config.resid_pdrop)
         # output projection
         self.proj = nn.Linear(config.n_embd, config.n_embd)
-        self.register_buffer("mask", torch.tril(torch.ones(config.block_size// 3 + 1, config.block_size // 3 + 1))
-                                     .view(1, 1, config.block_size// 3 + 1, config.block_size// 3 + 1))
+        self.register_buffer("mask", torch.tril(torch.ones(config.block_size // 3 + 1, config.block_size // 3 + 1))
+                             .view(1, 1, config.block_size // 3 + 1, config.block_size // 3 + 1))
         self.n_head = config.n_head
 
     def forward(self, x, layer_past=None):
         B, T, C = x.size()
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        k = self.key(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = self.query(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = self.value(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        k = self.key(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        q = self.query(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        v = self.value(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-  
+
         # reward_mask+=self.mask 
-        att = att.masked_fill(self.mask[:,:,:T,:T] == 0, float('-inf'))
+        att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float('-inf'))
         # att = att.masked_fill(reward_mask[:,:,:T,:T] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
         att = self.attn_drop(att)
-        y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+        y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        y = y.transpose(1, 2).contiguous().view(B, T, C)  # re-assemble all head outputs side by side
 
         # output projection
         y = self.resid_drop(self.proj(y))
@@ -110,27 +107,26 @@ class Autodis(nn.Module):
         self.ret_emb_score = nn.Sequential(nn.Linear(1, bucket_number, bias=False), nn.LeakyReLU())
         self.res = nn.Linear(bucket_number, bucket_number, bias=False)
         self.temp = nn.Sequential(
-            nn.Linear(1, bucket_number, bias=False), 
-            nn.LeakyReLU(), 
+            nn.Linear(1, bucket_number, bias=False),
+            nn.LeakyReLU(),
             nn.Linear(bucket_number, bucket_number, bias=False),
             nn.Sigmoid()
-            )
+        )
 
     def forward(self, x, layer_past=None):
-        bucket_value = torch.arange(0, 700, 7).to(x.device).reshape(100,1).type(torch.float32)
+        bucket_value = torch.arange(0, 700, 7).to(x.device).reshape(100, 1).type(torch.float32)
         Meta_emb = self.bucket(bucket_value)
         t = self.temp(x)
         x = self.ret_emb_score(x)
         # x.shape [batch_size, timestep, bucket_value]
         # t.shape [bucket_value]
         x = x + self.res(x)
-        max_value,_ = torch.max(x, dim=2, keepdim=True)
+        max_value, _ = torch.max(x, dim=2, keepdim=True)
         x = torch.exp(x - max_value)
         soft_sum = torch.sum(x, dim=2).unsqueeze(2)
         x = x / soft_sum
         x = torch.einsum('nck,km->ncm', [x, Meta_emb])
         return x
-
 
 
 class Block(nn.Module):
@@ -154,9 +150,10 @@ class Block(nn.Module):
         return x
 
 
-#@save
+# @save
 class Seq2SeqEncoder(d2l.Encoder):
     """用于序列到序列学习的循环神经网络编码器"""
+
     def __init__(self, vocab_size, embed_size, num_hiddens, num_layers,
                  dropout=0, **kwargs):
         super(Seq2SeqEncoder, self).__init__(**kwargs)
@@ -176,8 +173,10 @@ class Seq2SeqEncoder(d2l.Encoder):
         # state[0]的形状:(num_layers,batch_size,num_hiddens)
         return output, state
 
+
 class Seq2SeqDecoder(d2l.Decoder):
     """用于序列到序列学习的循环神经网络解码器"""
+
     def __init__(self, vocab_size, embed_size, num_hiddens, num_layers,
                  dropout=0, **kwargs):
         super(Seq2SeqDecoder, self).__init__(**kwargs)
@@ -196,7 +195,7 @@ class Seq2SeqDecoder(d2l.Decoder):
         context = logits_new.unsqueeze(0).repeat(X.shape[0], 1, 1)
         # context = state[-1].repeat(X.shape[0], 1, 1)
         X_and_context = torch.cat((X, context), 2)
-        state=state.contiguous()
+        state = state.contiguous()
         output, state = self.rnn(X_and_context, state)
         output_emb = output.permute(1, 0, 2)
         output = self.dense(output).permute(1, 0, 2)
@@ -204,7 +203,8 @@ class Seq2SeqDecoder(d2l.Decoder):
         # state[0]的形状:(num_layers,batch_size,num_hiddens)
         return output, state, output_emb
 
-#@save
+
+# @save
 def sequence_mask(X, valid_len, value=0):
     """在序列中屏蔽不相关的项"""
     maxlen = X.size(1)
@@ -213,76 +213,84 @@ def sequence_mask(X, valid_len, value=0):
     X[~mask] = value
     return X
 
-#@save
+
+# @save
 class MaskedSoftmaxCELoss(nn.CrossEntropyLoss):
     """带遮蔽的softmax交叉熵损失函数"""
+
     # pred的形状：(batch_size,num_steps,vocab_size)
     # label的形状：(batch_size,num_steps)
     # valid_len的形状：(batch_size,)
     def forward(self, pred, label, valid_len):
         weights = torch.ones_like(label)
         weights = sequence_mask(weights, valid_len)
-        self.reduction='none'
+        self.reduction = 'none'
         unweighted_loss = super(MaskedSoftmaxCELoss, self).forward(
             pred.permute(0, 2, 1), label)
         weighted_loss = (unweighted_loss * weights).mean(dim=1)
         return weighted_loss
 
 
-def bleu(pred_seq, label_seq, y_len):  #@save
+def bleu(pred_seq, label_seq, y_len):  # @save
     """计算BLEU"""
-    retA=0
+    retA = 0
     for i in range(pred_seq.shape[0]):
         for j in range(y_len[i]):
-            if pred_seq[i,j]==label_seq[i,j]:
-                retA+=1
+            if pred_seq[i, j] == label_seq[i, j]:
+                retA += 1
                 break
-    score=retA/sum(y_len)
+    score = retA / sum(y_len)
     return score
 
-def bleu_emb_pos(pred_seq, label_seq, y_len):  #@save
+
+def bleu_emb_pos(pred_seq, label_seq, y_len):  # @save
     """计算BLEU"""
-    retA=0
-    score_step=torch.abs(torch.cosine_similarity(pred_seq, label_seq,dim=-1))
+    retA = 0
+    score_step = torch.abs(torch.cosine_similarity(pred_seq, label_seq, dim=-1))
 
     for i in range(pred_seq.shape[0]):
-        score_batch=torch.sum(score_step[i,:y_len[i]])/y_len[i]
-        retA+=score_batch
-    score=retA/y_len.shape[0]
+        score_batch = torch.sum(score_step[i, :y_len[i]]) / y_len[i]
+        retA += score_batch
+    score = retA / y_len.shape[0]
     return score
 
 
-def bleu_emb(pred_seq, label_seq, y_len,return_step_one):  #@save
+def bleu_emb(pred_seq, label_seq, y_len, return_step_one):  # @save
     """计算BLEU"""
-    retA=0
+    retA = 0
 
-    score_neg=torch.zeros([8,pred_seq.shape[0],pred_seq.shape[1]],device=y_len.device)
+    score_neg = torch.zeros([8, pred_seq.shape[0], pred_seq.shape[1]], device=y_len.device)
     for i in range(8):
-        score_neg[i,:,:]=torch.abs(torch.cosine_similarity(pred_seq, label_seq[i*pred_seq.shape[0]:(i+1)*pred_seq.shape[0]],dim=-1)) * (15-2*i) / 8
+        score_neg[i, :, :] = torch.abs(
+            torch.cosine_similarity(pred_seq, label_seq[i * pred_seq.shape[0]:(i + 1) * pred_seq.shape[0]], dim=-1)) * (
+                                         15 - 2 * i) / 8
         if i > 4:
-            score_neg[i,:,:]=torch.abs(torch.cosine_similarity(pred_seq, label_seq[i*pred_seq.shape[0]:(i+1)*pred_seq.shape[0]],dim=-1)) * 0
+            score_neg[i, :, :] = torch.abs(
+                torch.cosine_similarity(pred_seq, label_seq[i * pred_seq.shape[0]:(i + 1) * pred_seq.shape[0]],
+                                        dim=-1)) * 0
     for i in range(pred_seq.shape[0]):
-        score_batch=torch.sum(score_neg[:,i,:y_len[i]],dim=1)/y_len[i]
-        score_batch_neg=(torch.sum(score_batch)-score_batch[int(return_step_one[i].item())])/7
+        score_batch = torch.sum(score_neg[:, i, :y_len[i]], dim=1) / y_len[i]
+        score_batch_neg = (torch.sum(score_batch) - score_batch[int(return_step_one[i].item())]) / 7
 
-        retA+=score_batch_neg
-    score=retA/y_len.shape[0]
+        retA += score_batch_neg
+    score = retA / y_len.shape[0]
     return score
 
-def InfoNCE(pred_seq, pos_seq, neg_seq, y_len,return_step_one):
-    
-    score_neg=torch.zeros([8,pred_seq.shape[0],pred_seq.shape[1]],device=y_len.device)
+
+def InfoNCE(pred_seq, pos_seq, neg_seq, y_len, return_step_one):
+    score_neg = torch.zeros([8, pred_seq.shape[0], pred_seq.shape[1]], device=y_len.device)
     for i in range(8):
-        score_neg[i,:,:]=torch.cosine_similarity(pred_seq, neg_seq[i*pred_seq.shape[0]:(i+1)*pred_seq.shape[0]],dim=-1)
-    l_neg = torch.zeros([pred_seq.shape[0],7],device=y_len.device)
+        score_neg[i, :, :] = torch.cosine_similarity(pred_seq,
+                                                     neg_seq[i * pred_seq.shape[0]:(i + 1) * pred_seq.shape[0]], dim=-1)
+    l_neg = torch.zeros([pred_seq.shape[0], 7], device=y_len.device)
     for i in range(pred_seq.shape[0]):
-        score_batch=torch.sum(score_neg[:,i,:y_len[i]],dim=1)/y_len[i]
-        index = list(set(range(8))-set([int(return_step_one[i].item())]))
+        score_batch = torch.sum(score_neg[:, i, :y_len[i]], dim=1) / y_len[i]
+        index = list(set(range(8)) - set([int(return_step_one[i].item())]))
         l_neg[i] = score_batch[index]
-    pos_score_step=torch.cosine_similarity(pred_seq, pos_seq,dim=-1)
-    l_pos = torch.zeros([pred_seq.shape[0],1],device=y_len.device)
+    pos_score_step = torch.cosine_similarity(pred_seq, pos_seq, dim=-1)
+    l_pos = torch.zeros([pred_seq.shape[0], 1], device=y_len.device)
     for i in range(pred_seq.shape[0]):
-        pos_score_batch=torch.sum(pos_score_step[i,:y_len[i]])/y_len[i]
+        pos_score_batch = torch.sum(pos_score_step[i, :y_len[i]]) / y_len[i]
         l_pos[i] = pos_score_batch
     logits = torch.cat([l_pos, l_neg], dim=1)
     T = 0.07
@@ -291,6 +299,7 @@ def InfoNCE(pred_seq, pos_seq, neg_seq, y_len,return_step_one):
     criterion = nn.CrossEntropyLoss().cuda()
     loss = criterion(logits, labels)
     return loss
+
 
 class GPT(nn.Module):
     """  the full GPT language model, with a context size of block_size """
@@ -305,14 +314,14 @@ class GPT(nn.Module):
         # input embedding stem
         self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd)
         self.pos_emb = nn.Parameter(torch.zeros(1, config.block_size + 1, config.n_embd))
-        self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep+1, config.n_embd))
+        self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep + 1, config.n_embd))
         self.drop = nn.Dropout(config.embd_pdrop)
         self.state_encoder = Seq2SeqEncoder(config.vocab_size, config.n_embd, config.n_embd, 2,
-                        0.2)
+                                            0.2)
         self.action_encoder = Seq2SeqEncoder(config.vocab_size, config.n_embd, config.n_embd, 2,
-                        0.2)
+                                             0.2)
         self.decoder = Seq2SeqDecoder(config.vocab_size, config.n_embd, config.n_embd, 2,
-                        0.2)
+                                      0.2)
         # transformer
         self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
         # decoder head
@@ -322,9 +331,7 @@ class GPT(nn.Module):
         self.block_size = config.block_size
         self.apply(self._init_weights)
 
-
         logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
-
 
         bucket_number = 100
         self.ret_emb = Autodis(config, bucket_number)
@@ -332,8 +339,6 @@ class GPT(nn.Module):
         self.state_embeddings = nn.Sequential(nn.Embedding(config.vocab_size, config.n_embd), nn.Tanh())
         self.action_embeddings = nn.Sequential(nn.Embedding(config.vocab_size, config.n_embd), nn.Tanh())
         nn.init.normal_(self.action_embeddings[0].weight, mean=0.0, std=0.02)
-
-
 
     def get_block_size(self):
         return self.block_size
@@ -349,7 +354,7 @@ class GPT(nn.Module):
 
     def _padding_sequence(self, sequence, max_length):
         pad_len = max_length - len(sequence)
-        sequence = sequence + [0] * pad_len 
+        sequence = sequence + [0] * pad_len
         sequence = sequence[-max_length:]  # truncate according to the max_length
         return sequence
 
@@ -369,7 +374,7 @@ class GPT(nn.Module):
         blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
         for mn, m in self.named_modules():
             for pn, p in m.named_parameters():
-                fpn = '%s.%s' % (mn, pn) if mn else pn # full param name
+                fpn = '%s.%s' % (mn, pn) if mn else pn  # full param name
                 if pn.endswith('bias'):
                     # all biases will not be decayed
                     no_decay.add(fpn)
@@ -379,7 +384,6 @@ class GPT(nn.Module):
                 elif pn.endswith('weight') and isinstance(m, blacklist_weight_modules):
                     # weights of blacklist modules will NOT be weight decayed
                     no_decay.add(fpn)
-
 
         # special case the position embedding parameter in the root GPT module as not decayed
         no_decay.add('pos_emb')
@@ -393,9 +397,10 @@ class GPT(nn.Module):
             no_decay.add(str(i))
         inter_params = decay & no_decay
         union_params = decay | no_decay
-        assert len(inter_params) == 0, "parameters %s made it into both decay/no_decay sets!" % (str(inter_params), )
-        assert len(param_dict.keys() - union_params) == 0, "parameters %s were not separated into either decay/no_decay set!" \
-                                                    % (str(param_dict.keys() - union_params), )
+        assert len(inter_params) == 0, "parameters %s made it into both decay/no_decay sets!" % (str(inter_params),)
+        assert len(
+            param_dict.keys() - union_params) == 0, "parameters %s were not separated into either decay/no_decay set!" \
+                                                    % (str(param_dict.keys() - union_params),)
 
         # create the pytorch optimizer object
         optim_groups = [
@@ -406,25 +411,25 @@ class GPT(nn.Module):
         return optimizer
 
     # state, action, and return
-    def forward(self, states, actions, actions_neg, y_len, targets, rtgs,return_step, timesteps=None):
-        
-        action_embeddings=torch.zeros([actions.shape[0], actions.shape[1], 128])
-        state_allstep=[]
+    def forward(self, states, actions, actions_neg, y_len, targets, rtgs, return_step, timesteps=None):
+
+        action_embeddings = torch.zeros([actions.shape[0], actions.shape[1], 128])
+        state_allstep = []
         for i in range(actions.shape[1]):
-            action_seq=actions[:,i,:].type(torch.long).squeeze(1)
+            action_seq = actions[:, i, :].type(torch.long).squeeze(1)
             output, state = self.action_encoder(action_seq)
             # output=output.permute(1, 0, 2) 
             # action_embeddings[:,i,:]=output[:,-1,:]
-            context=state.permute(1, 0, 2) 
-            action_embeddings[:,i,:]=context[:,-1,:]
+            context = state.permute(1, 0, 2)
+            action_embeddings[:, i, :] = context[:, -1, :]
             state_allstep.append(state)
-        token_embeddings = action_embeddings[:,-states.shape[1] + int(targets is None):,:]
+        token_embeddings = action_embeddings[:, -states.shape[1] + int(targets is None):, :]
         batch_size = states.shape[0]
-        all_global_pos_emb = torch.repeat_interleave(self.global_pos_emb, batch_size, dim=0) # batch_size, traj_length, n_embd
+        all_global_pos_emb = torch.repeat_interleave(self.global_pos_emb, batch_size,
+                                                     dim=0)  # batch_size, traj_length, n_embd
         # position_embeddings = torch.gather(all_global_pos_emb, 1, torch.repeat_interleave(timesteps, self.config.n_embd, dim=-1)) + self.pos_emb[:, :token_embeddings.shape[1], :]
-        token_embeddings=token_embeddings.to(device)
-        position_embeddings = all_global_pos_emb[:,::3,:]
-
+        token_embeddings = token_embeddings.to(device)
+        position_embeddings = all_global_pos_emb[:, ::3, :]
 
         # x = self.drop(token_all + position_all)
 
@@ -433,61 +438,63 @@ class GPT(nn.Module):
         # logits=token_embeddings
 
         # if we are given some desired targets also calculate the loss
-        loss_func = MaskedSoftmaxCELoss()    
-        loss=[]
+        loss_func = MaskedSoftmaxCELoss()
+        loss = []
 
         for i in range(actions.shape[1]):
-            logits_new=logits[:,i,:].squeeze(1)
-            targets_seq=targets[:,i,:].type(torch.long).squeeze(1) 
-            neg_seq=actions_neg[:,i,:].type(torch.long).squeeze(1) 
-            pos_seq=actions[:,i,:].type(torch.long).squeeze(1) 
+            logits_new = logits[:, i, :].squeeze(1)
+            targets_seq = targets[:, i, :].type(torch.long).squeeze(1)
+            neg_seq = actions_neg[:, i, :].type(torch.long).squeeze(1)
+            pos_seq = actions[:, i, :].type(torch.long).squeeze(1)
             bos = torch.tensor([5011] * targets_seq.shape[0]).reshape(-1, 1).to(device)
             dec_input = torch.cat([bos, targets_seq[:, :-1]], 1)
-            logits_new_pos=logits_new[:actions.shape[0]]
-            Y_hat,_,Y_emb = self.decoder(dec_input, state_allstep[i], logits_new_pos)
-            y_len_step=y_len[:,i]
+            logits_new_pos = logits_new[:actions.shape[0]]
+            Y_hat, _, Y_emb = self.decoder(dec_input, state_allstep[i], logits_new_pos)
+            y_len_step = y_len[:, i]
             loss_step1 = loss_func(Y_hat, targets_seq, y_len_step)
-            loss_step1=loss_step1.mean()
-            loss_step=loss_step1 
+            loss_step1 = loss_step1.mean()
+            loss_step = loss_step1
 
             loss.append(loss_step)
 
-        loss_mean=sum(loss)/len(loss)
+        loss_mean = sum(loss) / len(loss)
         return logits[:actions.shape[0]], loss_mean
-    #@save
 
-    def predict_seq2seq(self, states, actions, actions_len, targets, rtgs,r_step, timesteps, num_steps,
+    # @save
+
+    def predict_seq2seq(self, states, actions, actions_len, targets, rtgs, r_step, timesteps, num_steps,
                         device, save_attention_weights=False):
         """序列到序列模型的预测"""
         # 在预测时将net设置为评估模式
-        device=rtgs.device
+        device = rtgs.device
 
-        action_embeddings=torch.zeros([actions.shape[0], actions.shape[1], 128])
-        state_allstep=[]
+        action_embeddings = torch.zeros([actions.shape[0], actions.shape[1], 128])
+        state_allstep = []
         for i in range(actions.shape[1]):
-            action_seq=actions[:,i,:].type(torch.long).squeeze(1)
+            action_seq = actions[:, i, :].type(torch.long).squeeze(1)
             # bos = torch.tensor([5011] * Y.shape[0]).reshape(-1, 1)
             output, state = self.action_encoder(action_seq)
-            context=state.permute(1, 0, 2) 
-            action_embeddings[:,i,:]=context[:,-1,:]
+            context = state.permute(1, 0, 2)
+            action_embeddings[:, i, :] = context[:, -1, :]
             state_allstep.append(state)
-        token_embeddings = action_embeddings[:,-states.shape[1] + int(targets is None):,:]
+        token_embeddings = action_embeddings[:, -states.shape[1] + int(targets is None):, :]
         batch_size = states.shape[0]
-        all_global_pos_emb = torch.repeat_interleave(self.global_pos_emb, batch_size, dim=0) # batch_size, traj_length, n_embd
+        all_global_pos_emb = torch.repeat_interleave(self.global_pos_emb, batch_size,
+                                                     dim=0)  # batch_size, traj_length, n_embd
         # position_embeddings = torch.gather(all_global_pos_emb, 1, torch.repeat_interleave(timesteps, self.config.n_embd, dim=-1)) + self.pos_emb[:, :token_embeddings.shape[1], :]
-        token_embeddings=token_embeddings.to(device)
-        position_embeddings = all_global_pos_emb[:,::3,:]
+        token_embeddings = token_embeddings.to(device)
+        position_embeddings = all_global_pos_emb[:, ::3, :]
         x = self.drop(token_embeddings + position_embeddings)
         logits = self.blocks(x)
         loss_func = MaskedSoftmaxCELoss()
-        y_pred=torch.zeros_like(actions)
-        for j in range(actions.shape[1]-1, actions.shape[1]):
-            logits_new=logits[:,j,:].squeeze(1)
-            targets_seq=targets[:,j,:].type(torch.long).squeeze(1)
+        y_pred = torch.zeros_like(actions)
+        for j in range(actions.shape[1] - 1, actions.shape[1]):
+            logits_new = logits[:, j, :].squeeze(1)
+            targets_seq = targets[:, j, :].type(torch.long).squeeze(1)
 
-            score=[]
-            seq_len=actions_len[:,j]
-            dec_state=state_allstep[j]
+            score = []
+            seq_len = actions_len[:, j]
+            dec_state = state_allstep[j]
             output_seq, attention_weight_seq = [], []
             dec_X = torch.tensor([5011] * targets_seq.shape[0]).reshape(-1, 1).to(device)
             for k in range(num_steps):
@@ -498,27 +505,23 @@ class GPT(nn.Module):
                 # 保存注意力权重（稍后讨论）
                 if save_attention_weights:
                     attention_weight_seq.append(self.decoder.attention_weights)
-               
-                y_pred[:,j,k]=pred.squeeze(1)
+
+                y_pred[:, j, k] = pred.squeeze(1)
         score = []
         for i in range(y_pred.shape[0]):
-            score_i = bleu_seq(y_pred[i,-1,:],targets[i,-1,:])
+            score_i = bleu_seq(y_pred[i, -1, :], targets[i, -1, :])
             score.append(score_i)
-        score = sum(score)/len(score)
-
-
-
-
+        score = sum(score) / len(score)
 
         return score
 
 
-def bleu_seq(y_pred,y):
-    score_sum=0
+def bleu_seq(y_pred, y):
+    score_sum = 0
     for i in range(y_pred.shape[0]):
         for j in range(y.shape[0]):
-            if y_pred[i]==y[j]:
-                score_sum+=1
+            if y_pred[i] == y[j]:
+                score_sum += 1
                 break
-    score=score_sum/y_pred.shape[0]
+    score = score_sum / y_pred.shape[0]
     return score

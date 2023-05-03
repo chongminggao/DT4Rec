@@ -17,26 +17,23 @@ GPT model:
 - the final decoder is a linear projection into a vanilla Softmax classifier
 """
 
-import math
 import logging
+import math
 
 import torch
-import torch.nn as nn
-from torch.nn import functional as F
-from torch import nn
-
-import collections
-from torch import nn
 from d2l import torch as d2l
-from gpu_mem_track import MemTracker
+from torch import nn
+from torch.nn import functional as F
+
+# from gpu_mem_track import MemTracker
 
 logger = logging.getLogger(__name__)
 
-import numpy as np
 
 class GELU(nn.Module):
     def forward(self, input):
         return F.gelu(input)
+
 
 class GPTConfig:
     """ base GPT config, params common to all GPT versions """
@@ -47,14 +44,16 @@ class GPTConfig:
     def __init__(self, vocab_size, block_size, **kwargs):
         self.vocab_size = vocab_size
         self.block_size = block_size
-        for k,v in kwargs.items():
+        for k, v in kwargs.items():
             setattr(self, k, v)
+
 
 class GPT1Config(GPTConfig):
     """ GPT-1 like network roughly 125M params """
     n_layer = 12
     n_head = 12
     n_embd = 768
+
 
 class CausalSelfAttention(nn.Module):
     """
@@ -76,30 +75,31 @@ class CausalSelfAttention(nn.Module):
         # output projection
         self.proj = nn.Linear(config.n_embd, config.n_embd)
         self.register_buffer("mask", torch.tril(torch.ones(config.block_size + 1, config.block_size + 1))
-                                     .view(1, 1, config.block_size + 1, config.block_size + 1))
+                             .view(1, 1, config.block_size + 1, config.block_size + 1))
         self.n_head = config.n_head
 
     def forward(self, x):
         B, T, C = x.size()
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        k = self.key(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = self.query(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = self.value(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        k = self.key(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        q = self.query(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        v = self.value(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.mask[:,:,:T,:T] == 0, float('-inf'))
+        att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float('-inf'))
         # att = att.masked_fill(paddle_mask, float('-inf'))
-        
+
         att = F.softmax(att, dim=-1)
         att = self.attn_drop(att)
-        y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+        y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        y = y.transpose(1, 2).contiguous().view(B, T, C)  # re-assemble all head outputs side by side
 
         # output projection
         y = self.resid_drop(self.proj(y))
         return y
+
 
 class Block(nn.Module):
     """ an unassuming Transformer block """
@@ -115,14 +115,17 @@ class Block(nn.Module):
             nn.Linear(4 * config.n_embd, config.n_embd),
             nn.Dropout(config.resid_pdrop),
         )
+
     def forward(self, x):
         x = x + self.attn(self.ln1(x))
         x = x + self.mlp(self.ln2(x))
         return x
 
-#@save
+
+# @save
 class Seq2SeqEncoder(d2l.Encoder):
     """用于序列到序列学习的循环神经网络编码器"""
+
     def __init__(self, vocab_size, embed_size, num_hiddens, num_layers,
                  dropout=0, **kwargs):
         super(Seq2SeqEncoder, self).__init__(**kwargs)
@@ -142,8 +145,10 @@ class Seq2SeqEncoder(d2l.Encoder):
         # state[0]的形状:(num_layers,batch_size,num_hiddens)
         return output, state
 
+
 class Seq2SeqDecoder(d2l.Decoder):
     """用于序列到序列学习的循环神经网络解码器"""
+
     def __init__(self, vocab_size, embed_size, num_hiddens, num_layers,
                  dropout=0, **kwargs):
         super(Seq2SeqDecoder, self).__init__(**kwargs)
@@ -161,12 +166,13 @@ class Seq2SeqDecoder(d2l.Decoder):
         # 广播context，使其具有与X相同的num_steps
         context = logits_new.unsqueeze(0).repeat(X.shape[0], 1, 1)
         X_and_context = torch.cat((X, context), 2)
-        state=state.contiguous()
+        state = state.contiguous()
         output, state = self.rnn(X_and_context, state)
         output = self.dense(output).permute(1, 0, 2)
         return output, state
 
-#@save
+
+# @save
 def sequence_mask(X, valid_len, value=0):
     """在序列中屏蔽不相关的项"""
     maxlen = X.size(1)
@@ -175,29 +181,33 @@ def sequence_mask(X, valid_len, value=0):
     X[~mask] = value
     return X
 
-#@save
+
+# @save
 class MaskedSoftmaxCELoss(nn.CrossEntropyLoss):
     """带遮蔽的softmax交叉熵损失函数"""
+
     # pred的形状：(batch_size,num_steps,vocab_size)
     # label的形状：(batch_size,num_steps)
     # valid_len的形状：(batch_size,)
     def forward(self, pred, label, valid_len):
         weights = torch.ones_like(label)
         weights = sequence_mask(weights, valid_len)
-        self.reduction='none'
+        self.reduction = 'none'
         unweighted_loss = super(MaskedSoftmaxCELoss, self).forward(
             pred.permute(0, 2, 1), label)
         weighted_loss = (unweighted_loss * weights).mean(dim=1)
         return weighted_loss
 
-def bleu(pred_seq, label_seq, k):  #@save
+
+def bleu(pred_seq, label_seq, k):  # @save
     """计算BLEU"""
-    retA=[]
+    retA = []
     for i in pred_seq:
         if i in label_seq:
             retA.append(i)
-    score=len(retA)/len(pred_seq)
+    score = len(retA) / len(pred_seq)
     return score
+
 
 class GPT(nn.Module):
     """  the full GPT language model, with a context size of block_size """
@@ -212,14 +222,14 @@ class GPT(nn.Module):
         # input embedding stem
         self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd)
         self.pos_emb = nn.Parameter(torch.zeros(1, config.block_size + 1, config.n_embd))
-        self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep+1, config.n_embd))
+        self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep + 1, config.n_embd))
         self.drop = nn.Dropout(config.embd_pdrop)
         self.state_encoder = Seq2SeqEncoder(config.vocab_size, config.n_embd, config.n_embd, 2,
-                        0.2)
+                                            0.2)
         self.action_encoder = Seq2SeqEncoder(config.vocab_size, config.n_embd, config.n_embd, 2,
-                        0.2)
+                                             0.2)
         self.decoder = Seq2SeqDecoder(config.vocab_size, config.n_embd, config.n_embd, 2,
-                        0.2)
+                                      0.2)
         # transformer
         self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
 
@@ -229,7 +239,6 @@ class GPT(nn.Module):
 
         self.block_size = config.block_size
         self.apply(self._init_weights)
-
 
         logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
 
@@ -267,7 +276,7 @@ class GPT(nn.Module):
         blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
         for mn, m in self.named_modules():
             for pn, p in m.named_parameters():
-                fpn = '%s.%s' % (mn, pn) if mn else pn # full param name
+                fpn = '%s.%s' % (mn, pn) if mn else pn  # full param name
                 if pn.endswith('bias'):
                     # all biases will not be decayed
                     no_decay.add(fpn)
@@ -277,7 +286,6 @@ class GPT(nn.Module):
                 elif pn.endswith('weight') and isinstance(m, blacklist_weight_modules):
                     # weights of blacklist modules will NOT be weight decayed
                     no_decay.add(fpn)
-
 
         # special case the position embedding parameter in the root GPT module as not decayed
         no_decay.add('pos_emb')
@@ -291,9 +299,10 @@ class GPT(nn.Module):
             no_decay.add(str(i))
         inter_params = decay & no_decay
         union_params = decay | no_decay
-        assert len(inter_params) == 0, "parameters %s made it into both decay/no_decay sets!" % (str(inter_params), )
-        assert len(param_dict.keys() - union_params) == 0, "parameters %s were not separated into either decay/no_decay set!" \
-                                                    % (str(param_dict.keys() - union_params), )
+        assert len(inter_params) == 0, "parameters %s made it into both decay/no_decay sets!" % (str(inter_params),)
+        assert len(
+            param_dict.keys() - union_params) == 0, "parameters %s were not separated into either decay/no_decay set!" \
+                                                    % (str(param_dict.keys() - union_params),)
 
         # create the pytorch optimizer object
         optim_groups = [
@@ -305,65 +314,74 @@ class GPT(nn.Module):
 
     # state, action, and return
     def forward(self, states, actions, targets=None, rtgs=None, timesteps=None):
-        device=rtgs.device
-        state_embeddings=torch.zeros([states.shape[0], states.shape[1], 128])
+        device = rtgs.device
+        state_embeddings = torch.zeros([states.shape[0], states.shape[1], 128])
         for i in range(states.shape[1]):
-            states_seq=states[:,i,:].type(torch.long).squeeze(1)
+            states_seq = states[:, i, :].type(torch.long).squeeze(1)
             output, state = self.state_encoder(states_seq)
-            context=state.permute(1, 0, 2) 
-            state_embeddings[:,i,:]=context[:,-1,:]
-        
-        action_embeddings=torch.zeros([actions.shape[0], actions.shape[1], 128])
+            context = state.permute(1, 0, 2)
+            state_embeddings[:, i, :] = context[:, -1, :]
+
+        action_embeddings = torch.zeros([actions.shape[0], actions.shape[1], 128])
         for i in range(actions.shape[1]):
-            action_seq=actions[:,i,:].type(torch.long).squeeze(1)
+            action_seq = actions[:, i, :].type(torch.long).squeeze(1)
             output, state = self.action_encoder(action_seq)
-            context=state.permute(1, 0, 2) 
-            action_embeddings[:,i,:]=context[:,-1,:]
-        
-        
-        if actions is not None and self.model_type == 'reward_conditioned': 
+            context = state.permute(1, 0, 2)
+            action_embeddings[:, i, :] = context[:, -1, :]
+
+        if actions is not None and self.model_type == 'reward_conditioned':
             rtg_embeddings = self.ret_emb(rtgs.type(torch.float32))
-            token_embeddings = torch.zeros((states.shape[0], states.shape[1]*3 - int(targets is None), self.config.n_embd), dtype=torch.float32, device=state_embeddings.device)
-            token_embeddings[:,::3,:] = state_embeddings
-            token_embeddings[:,1::3,:] = action_embeddings[:,-states.shape[1] + int(targets is None):,:]
-            token_embeddings[:,2::3,:] = rtg_embeddings
-        elif actions is None and self.model_type == 'reward_conditioned': # only happens at very first timestep of evaluation
+            token_embeddings = torch.zeros(
+                (states.shape[0], states.shape[1] * 3 - int(targets is None), self.config.n_embd), dtype=torch.float32,
+                device=state_embeddings.device)
+            token_embeddings[:, ::3, :] = state_embeddings
+            token_embeddings[:, 1::3, :] = action_embeddings[:, -states.shape[1] + int(targets is None):, :]
+            token_embeddings[:, 2::3, :] = rtg_embeddings
+        elif actions is None and self.model_type == 'reward_conditioned':  # only happens at very first timestep of evaluation
             rtg_embeddings = self.ret_emb(rtgs.type(torch.float32))
-            token_embeddings = torch.zeros((states.shape[0], states.shape[1]*2, self.config.n_embd), dtype=torch.float32, device=state_embeddings.device)
-            token_embeddings[:,::2,:] = state_embeddings # really just [:,0,:]
-            token_embeddings[:,1::2,:] = action_embeddings[:,-states.shape[1] + int(targets is None):,:] # really just [:,1,:]
+            token_embeddings = torch.zeros((states.shape[0], states.shape[1] * 2, self.config.n_embd),
+                                           dtype=torch.float32, device=state_embeddings.device)
+            token_embeddings[:, ::2, :] = state_embeddings  # really just [:,0,:]
+            token_embeddings[:, 1::2, :] = action_embeddings[:, -states.shape[1] + int(targets is None):,
+                                           :]  # really just [:,1,:]
         elif actions is not None and self.model_type == 'naive':
-            token_embeddings = torch.zeros((states.shape[0], states.shape[1]*2 - int(targets is None), self.config.n_embd), dtype=torch.float32, device=state_embeddings.device)
-            token_embeddings[:,::2,:] = state_embeddings
-            token_embeddings[:,1::2,:] = action_embeddings[:,-states.shape[1] + int(targets is None):,:]
-        elif actions is None and self.model_type == 'naive': # only happens at very first timestep of evaluation
+            token_embeddings = torch.zeros(
+                (states.shape[0], states.shape[1] * 2 - int(targets is None), self.config.n_embd), dtype=torch.float32,
+                device=state_embeddings.device)
+            token_embeddings[:, ::2, :] = state_embeddings
+            token_embeddings[:, 1::2, :] = action_embeddings[:, -states.shape[1] + int(targets is None):, :]
+        elif actions is None and self.model_type == 'naive':  # only happens at very first timestep of evaluation
             token_embeddings = state_embeddings
         else:
             raise NotImplementedError()
         batch_size = states.shape[0]
-        all_global_pos_emb = torch.repeat_interleave(self.global_pos_emb, batch_size, dim=0) # batch_size, traj_length, n_embd
-        position_embeddings = torch.gather(all_global_pos_emb, 1, torch.repeat_interleave(timesteps, self.config.n_embd, dim=-1)) + self.pos_emb[:, :token_embeddings.shape[1], :]
+        all_global_pos_emb = torch.repeat_interleave(self.global_pos_emb, batch_size,
+                                                     dim=0)  # batch_size, traj_length, n_embd
+        position_embeddings = torch.gather(all_global_pos_emb, 1, torch.repeat_interleave(timesteps, self.config.n_embd,
+                                                                                          dim=-1)) + self.pos_emb[:, :
+                                                                                                                     token_embeddings.shape[
+                                                                                                                         1],
+                                                                                                     :]
         token_embeddings = token_embeddings.to(device)
         x = self.drop(token_embeddings + position_embeddings)
         x = self.blocks(x)
         x = self.ln_f(x)
         logits = self.head(x)
-    
+
         if actions is not None and self.model_type == 'reward_conditioned':
-            logits = logits[:, 1::3, :] # only keep predictions from state_embeddings
+            logits = logits[:, 1::3, :]  # only keep predictions from state_embeddings
         elif actions is None and self.model_type == 'reward_conditioned':
             logits = logits[:, 1:, :]
         elif actions is not None and self.model_type == 'naive':
-            logits = logits[:, ::2, :] # only keep predictions from state_embeddings
+            logits = logits[:, ::2, :]  # only keep predictions from state_embeddings
         elif actions is None and self.model_type == 'naive':
-            logits = logits # for completeness
+            logits = logits  # for completeness
         else:
             raise NotImplementedError()
 
         # if we are given some desired targets also calculate the loss
         loss = None
         if targets is not None:
-            loss_func=nn.MSELoss(reduction='mean')
+            loss_func = nn.MSELoss(reduction='mean')
             loss = loss_func(logits.reshape(-1), targets.reshape(-1))
         return logits, loss
-
